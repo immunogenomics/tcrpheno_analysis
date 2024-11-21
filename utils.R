@@ -49,7 +49,7 @@ get_metap <- function(betas, ses){
 }
 
 my_umap_theme <- function(g, cont = FALSE, show.legend=TRUE, aes=36){
-  g = g + geom_point_rast(size=0.001, show.legend=show.legend) + xlab("UMAP1") + ylab("UMAP2")
+  g = g + geom_point_rast(size=0.00001, show.legend=show.legend, shape=".") + xlab("UMAP1") + ylab("UMAP2")
   g = g + theme_classic(base_size=20) + theme(plot.title.position = "plot", plot.title=element_text(size=100, face="bold"))
   if (cont==FALSE){
     return(g + guides(color = guide_legend(override.aes = list(size=aes))))
@@ -428,10 +428,10 @@ scale_variables <- function(data, mns=NULL, sds=NULL){
     sds = sapply(1:ncol(data), function(x) sd(data[,x], na.rm=TRUE))
     names(sds) = colnames(data)
   }
-  mns = mns[!(is.na(mns)) & !(is.na(sds)) & sds!=0]
-  sds = sds[names(sds) %in% names(mns)]
-  data = data[,as.character(names(mns))]
-  print(table(colnames(data)==names(mns)))
+  #mns = mns[!(is.na(mns)) & !(is.na(sds)) & sds!=0]
+  #sds = sds[names(sds) %in% names(mns)]
+  #data = data[,as.character(names(mns))]
+  #print(table(colnames(data)==names(mns)))
   data = sweep(data, 2, mns)
   data = sweep(data, MARGIN=2, FUN="/", sds)
   data[is.na(data)] <- 0
@@ -531,21 +531,12 @@ get_long_format_entropy <- function(sequences, min_len=11, max_len=18, bg_sequen
   return(df)
 }
 
-antigen_forest_plot <- function(df, ylog10=FALSE, xlims = NULL, colorHLA = FALSE, colorself = FALSE, colorsource = FALSE, meta_hline=FALSE){
-  betas = df$b
-  antigens = df$antigen
-  ses = df$se
-  ps = df$p
-  rma.res = rma(df$b, sei=df$se, measure="OR", method="ML")
-  mb = as.numeric(as.character(rma.res$beta))
-  p = as.numeric(as.character(rma.res$pval))
-  se = as.numeric(as.character(rma.res$se))
-  tp = data.frame(c(antigens, "meta-analysis"), c(betas, mb), c(ses, se), c(ps, p))
-  colnames(tp) = c("antigen", "beta", "se", "P")
+clean_antigen_labels <- function(tp){
   tp$meta = grepl("meta", tp$antigen)
   tp$lab = sapply(tp$antigen, function(x) ifelse(x=="meta-analysis", "meta-analysis", strsplit(x, "_")[[1]][2]))
+  tp$lab = sapply(tp$antigen, function(x) ifelse(x=="meta-analysis", "meta-analysis", strsplit(x, "_")[[1]][2]))
   tp$hla = sapply(tp$antigen, function(x) ifelse(x=="meta-analysis", "meta-analysis", strsplit(x, "_")[[1]][1]))
-  tp$source = "self"
+  tp$source = "human"
   tp$source[grepl("HIV", tp$antigen)] = "HIV"
   tp$source[grepl("HPV", tp$antigen)] = "HPV"
   tp$source[grepl("CMV", tp$antigen)] = "CMV"
@@ -554,32 +545,67 @@ antigen_forest_plot <- function(df, ylog10=FALSE, xlims = NULL, colorHLA = FALSE
   tp$source[grepl("Kanamycin.B.dioxygenase", tp$antigen)] = "fungal"
   tp$source[grepl("Influenza", tp$antigen)] = "Influenza"
   tp$source[grepl("meta", tp$antigen)] = "meta"
+  tp$lab = paste(tp$source, tp$lab, sep=", ")
+  tp$lab[grepl("meta-analysis", tp$lab)] = "meta-analysis"
   ants = unique(tp$lab)
   tp$lab = factor(tp$lab, levels=c(ants[ants!="meta-analysis"], "meta-analysis"))
+  return(tp)
+}
+
+antigen_forest_plot <- function(df, ylog10=FALSE, xlims = NULL, colorHLA = FALSE, colorself = FALSE, colorsource = FALSE, colorpower = FALSE, meta_hline=FALSE){
+  betas = df$b
+  antigens = df$antigen
+  ses = df$se
+  ps = df$p
+  rma.res = rma(df$b, sei=df$se, measure="OR", method="ML")
+  mb = as.numeric(as.character(rma.res$beta))
+  p = as.numeric(as.character(rma.res$pval))
+  se = as.numeric(as.character(rma.res$se))
+  tp = data.frame(c(antigens, "meta-analysis"), c(betas, mb), c(ses, se), c(ps, p), c(df$power, NA))
+  colnames(tp) = c("antigen", "beta", "se", "P", "power")
+  tp = clean_antigen_labels(tp)
   pal = brewer.pal(8, "Dark2")
   if (colorHLA){
     g = ggplot(tp, aes(lab, beta, shape=meta, color=hla))
+    g = g + scale_color_manual(values=c(pal, "black"))
   } else if (colorself){
     g = ggplot(tp, aes(lab, beta, shape=meta, color=source=="self"))
+    g = g + scale_color_manual(values=c(pal, "black"))
   } else if (colorsource){
     g = ggplot(tp, aes(lab, beta, shape=meta, color=source))
+    g = g + scale_color_manual(values=c(pal, "black"))
+  } else if (colorpower){
+    g = ggplot(tp, aes(lab, beta, shape=meta, color=power))
+    g = g + scale_color_viridis(option="plasma")
   } else {
     g = ggplot(tp, aes(lab, beta, shape=meta, color=meta))
+    g = g + scale_color_manual(values=c(pal, "black"))
   }
-  g = g + scale_color_manual(values=c(pal, "black"))
-  g = g + geom_errorbar(aes(ymin=beta+qnorm(0.05)*se, ymax=beta+qnorm(0.95)*se), show.legend = FALSE, color="black") + geom_point() + geom_hline(yintercept=0)
+  g = g + geom_errorbar(aes(ymin=beta+qnorm(0.05)*se, ymax=beta+qnorm(0.95)*se), show.legend = FALSE, color="black") + geom_point(size=3) + geom_hline(yintercept=0)
   g = g + theme_classic() + scale_shape_manual(values=c(16, 18)) 
   if (!(is.null(xlims))){
     g = g + coord_cartesian(xlim=(c(xlims[1], xlims[2])))
   }
-  g = g + theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1), title=element_text(hjust=0.5))
+  g = g + theme(axis.text.x = element_text(angle = 55, vjust = 1, hjust=1), title=element_text(hjust=0.5))
   if (meta_hline){
     g = g + geom_hline(yintercept=tp$beta[tp$meta==TRUE], color="#e7288a", linetype="dashed")
   }
+  return(g + xlab("antigen"))
+}
+
+antigen_power_analysis_plot <- function(betas, meta_power){
+  betas = betas[order(betas$b),]
+  tp = data.frame(betas[,c("antigen", "power")])
+  tp = rbind(tp, data.frame(antigen="meta-analysis", power=meta_power))
+  tp = clean_antigen_labels(tp)
+  g = ggplot(tp, aes(lab, power, fill=grepl("meta", antigen)))
+  g = g + geom_bar(stat="identity", color="black") + theme_classic()
+  g = g + xlab("antigen specificity") + scale_fill_manual(values=c("gray", "hotpink3"))
+  g = g + theme(axis.text.x = element_text(angle = 55, vjust = 1, hjust=1), title=element_text(hjust=0.5))
   return(g)
 }
 
-get_bin_stats <- function(data, cols, quantile_bin = NULL, lcat=NULL){
+get_bin_stats <- function(data, cols, quantile_bin = NULL, lcat=NULL, randeff=TRUE){
   if (!(is.null(lcat))){
     data = data[data$lcat == lcat,]
   }
@@ -591,7 +617,11 @@ get_bin_stats <- function(data, cols, quantile_bin = NULL, lcat=NULL){
     ref = vals[length(vals)/2]
   }
   data$bin = factor(data$bin, levels=c(ref, vals[vals!=ref]))
-  fit = glmer(target ~ bin + (1|Donor), data=data, family="binomial")
+  if (randeff){
+    fit = glmer(target ~ bin + (1|Donor), data=data, family="binomial")
+  } else {
+    fit = glm(target ~ bin, data=data, family="binomial")
+  }
   st = tidy(fit)
   st$OR = exp(st$estimate)
   st$lowOR = exp(st$estimate+qnorm(0.025)*st$std.error)
@@ -615,7 +645,7 @@ get_odds <- function(p){
   return(p/(1-p))
 }
 
-plot_TCRscore_validation_bybin <- function(data, cv, lcats, plot_together = FALSE, fate, colors = NULL, xlab = NULL, ylab = NULL, quantile_bin = NULL, ymin=NULL, ymax=NULL, thresh =10, show.legend=TRUE, do_mm=FALSE, rescale=FALSE){##}, lcat){
+plot_TCRscore_validation_bybin <- function(data, cv, lcats, minx=-3, maxx=4, plot_together = FALSE, fate, colors = NULL, xlab = NULL, ylab = NULL, quantile_bin = NULL, ymin=NULL, ymax=NULL, thresh =10, show.legend=TRUE, do_mm=FALSE, rescale=FALSE, barplot_only=FALSE){##}, lcat){
   if (is.null(colors)){
     colors = c("darkred", "cadetblue", "darkgoldenrod3", "pink3")
     key = c("blood", "lymph", "nonlymph", "thymus")
@@ -643,8 +673,6 @@ plot_TCRscore_validation_bybin <- function(data, cv, lcats, plot_together = FALS
   }
   fit = glmer(target ~ TCRscore + (1|Donor), data=tmp, family="binomial")
   st = tidy(fit)
-  st$p.value[st$term=="TCRscore" & st$estimate>0] = st$p.value[st$term=="TCRscore" & st$estimate>0]/2
-  st$p.value[st$term=="TCRscore" & st$estimate<0] = 0.5 + st$p.value[st$term=="TCRscore" & st$estimate>0]/2
   print(st)
   b = numeric(length(lcats))
   se = numeric(length(lcats))
@@ -664,9 +692,10 @@ plot_TCRscore_validation_bybin <- function(data, cv, lcats, plot_together = FALS
   if (is.null(xlab)){ xlab = "TCR score" }
   if (is.null(ylab)) { ylab = paste0(c("proportion of cells\n in", fate, "state"), collapse=" ") }
   g = ggplot(gr, aes(bin, prop, fill=lcat))
+  #g = g + coord_cartesian(ylim=c(0.85,1))
   g = g + geom_bar(stat="identity", position="dodge", show.legend = show.legend, size=4) + theme_bw(base_size=15) + scale_fill_manual(values=colors)##c("darkred", "cadetblue", "darkgoldenrod3"))
   if (!(is.null(quantile_bin))){
-    g = g + xlim(c(min(data$minbin), max(data$maxbin)))
+    g = g + xlim(c(minx,maxx))
   }
   g1 = g + xlab(xlab) + ylab(ylab) 
   gr = gr[gr$nneg>=thresh,]
@@ -691,9 +720,12 @@ plot_TCRscore_validation_bybin <- function(data, cv, lcats, plot_together = FALS
     data$mmp[data$ptl==min(data$ptl)] = "minptl"
     data$mmp[data$ptl==max(data$ptl)] = "maxptl"
     d = data[data$mm %in% c("minbin", "maxbin") & data$lcat==lcats[lc],]
-    tmp = data %>% group_by(mmp) %>% dplyr::summarise(npos = length(target[target==TRUE]), nneg = length(target[target==FALSE]))
+    d$mm = factor(d$mm, levels=c("minbin", "maxbin"))
+    tmp = data %>% group_by(mmp) %>% dplyr::summarise(prop.pos = length(target[target==TRUE])/length(target[!(is.na(target))]))
+    print(tmp)
     if (do_mm){
       fit = glmer(target ~ mm + (1|Donor), data=d, family="binomial")
+      print(tidy(fit))
     }
   }
   
@@ -701,22 +733,30 @@ plot_TCRscore_validation_bybin <- function(data, cv, lcats, plot_together = FALS
   st$bin = as.numeric(as.character(st$bin))
   ylab = paste0(c("OR for", fate, "fate"), collapse=" ") 
   g = ggplot() + geom_hline(yintercept=1, linetype="dashed", color="gray")
-  g = g + geom_point(aes(x=st$bin, y=st$OR, color=st$lcat), show.legend = show.legend) + theme_classic(base_size=15) 
+  g = g + geom_point(aes(x=st$bin, y=st$OR, color=st$lcat), show.legend = show.legend, size=2) + theme_classic(base_size=15) 
   g = g + geom_errorbar(aes(x=st$bin, y=st$OR, ymin=st$lowOR, ymax=st$highOR, color=st$lcat), show.legend = show.legend)
-  g = g + scale_color_manual(values=colors)
+  g = g + scale_color_manual(values=colors) + xlim(c(minx,maxx))
   if (!(is.null(quantile_bin))){
     map$bin = as.numeric(as.character(map$bin))
     st = left_join(st, map)
     print(st)
-    g = g + geom_errorbar(aes(x=st$bin, y=st$OR, xmin=st$minbin, xmax=st$maxbin, color=st$lcat), show.legend = show.legend)
+    #g = g + geom_errorbar(aes(x=st$bin, y=st$OR, xmin=st$minbin, xmax=st$maxbin, color=st$lcat), show.legend = show.legend)
   } 
-  g = g + scale_y_continuous(trans="log10")##, limits=c(0.75, 1.6), breaks=c(0.8, 1, 1.5))
+  if (cv==4){
+    g = g + scale_y_continuous(trans="log10", limits=c(0.7, 1.6), breaks=c(0.8, 1, 1.2, 1.5))
+  } else {
+    g = g + scale_y_continuous(trans="log10")
+  }
   g2 = g + xlab(xlab) + ylab(ylab) 
-  return(g1 + g2 + plot_layout(ncol=1))
+  if (barplot_only) { 
+    return(g1)
+  } else {
+    return(g1 + g2 + plot_layout(ncol=1))
+  }
 }
 
 call_antigens <- function(R, thresholds, md10xg){
-  bin = readRDS("10xG_CD8.3.0.2_aggregated_binarized_matrix_full0927.rds")
+  bin = readRDS("data/10xG_CD8.3.0.2_aggregated_binarized_matrix_full0927.rds")
   ants = colnames(R)
   counts = bin[,19:62]
   hlas = sapply(ants, function(x) strsplit(x, "_")[[1]][1])
@@ -761,7 +801,7 @@ call_antigens <- function(R, thresholds, md10xg){
 
 testTCRscore_perantigen <- function(call, md10xg, cell_state="binary", thresh=10, stain_cov=FALSE, stain_only=FALSE, remove_CD4s = FALSE){
   ants_called = unique(call$antigen)
-  call = suppressMessages(left_join(call, md10xg[,c("cell", "donor", "AE", "X4", "cmem")]))
+  call = suppressMessages(left_join(call, md10xg[,c("cell", "donor", "AE", "TCR.mem", "cmem")]))
   call = call[!(is.na(call$donor)),]
   call = call[!(is.na(call$cmem)),]
   if (remove_CD4s){
@@ -781,24 +821,24 @@ testTCRscore_perantigen <- function(call, md10xg, cell_state="binary", thresh=10
   for (i in 1:length(ants_called)){
     dat = call[call$antigen==ants_called[i],]
     dat = dat[!(is.na(dat$AE)),]
-    dat = dat[!(is.na(dat$X4)),]
+    dat = dat[!(is.na(dat$TCR.mem)),]
     dat$stain = scale(dat$stain)[,1]
     if (nrow(dat[dat$AE,])<1 | nrow(dat[!(dat$AE),])<thresh) { next }
     if (length(unique(dat$donor))>1){
       if (stain_cov){
-        fit = glm(AE ~ X4 + stain + donor, data=dat, family="binomial")
+        fit = glm(AE ~ TCR.mem + stain + donor, data=dat, family="binomial")
       } else if (stain_only){
         fit = glm(AE ~ stain + donor, data=dat, family="binomial")
       } else {
-        fit = glm(AE ~ X4 + donor, data=dat, family="binomial")
+        fit = glm(AE ~ TCR.mem + donor, data=dat, family="binomial")
       }
     } else {
       if (stain_cov){
-        fit = glm(AE ~ X4 + stain, data=dat, family="binomial")
+        fit = glm(AE ~ TCR.mem + stain, data=dat, family="binomial")
       } else if (stain_only){
         fit = glm(AE ~ stain, data=dat, family="binomial")
       } else {
-        fit = glm(AE ~ X4, data=dat, family="binomial")
+        fit = glm(AE ~ TCR.mem, data=dat, family="binomial")
       }
     }
     st = tidy(fit)
@@ -844,7 +884,7 @@ get_cells_included <- function(clust, covid_status="any", T_subset="allT"){
 }
 
 twin_analysis <- function(tcr_info, covid_status="any", T_subset="allT", cl_res="cl0.5"){
-  clust = readRDS("metadata_moreclust2_combat_full_authTplusNKT_20hPCs_tcrfilt0607_nvargenes200_sampTH1.instTH0.5.poolTH0.5.rds")
+  clust = readRDS("data/metadata_moreclust2_combat_full_authTplusNKT_20hPCs_tcrfilt0607_nvargenes200_sampTH1.instTH0.5.poolTH0.5.rds")
   clust$cl = as.character(clust[,which(colnames(clust)==cl_res)])
   cells_included = intersect(as.character(tcr_info$barcode_id), get_cells_included(clust, covid_status, T_subset))
   possible_clusters = unique(as.character(clust$cl[clust$X %in% cells_included]))
@@ -857,7 +897,7 @@ twin_analysis <- function(tcr_info, covid_status="any", T_subset="allT", cl_res=
   getPalette = colorRampPalette(brewer.pal(8, "Dark2"))
   clustdflong$x = ifelse(clustdflong$type=="exp", "expected", "observed")
   g = ggplot(clustdflong, aes(x, count, color=clust, group=clust))
-  g = g + geom_point() + geom_line() + theme_bw() + xlab("") + ylab("number of matches")
+  g = g + geom_point() + geom_line() + theme_bw(base_size=15) + xlab("") + ylab("number of matches")
   lineplot = g + scale_color_manual(values = getPalette(length(unique(clustdflong$clust)))) + labs(color="transcriptional\n cluster")
   return(list(twin_tcrs = twin_tcrs, clustdf = clustdf, lineplot = lineplot))
 }
@@ -884,9 +924,11 @@ compute_expobs <- function(tt, possible_clusters, exc=c("")){
   names(exp_perclust) = names(null_freq)
   clustdf = data.frame(clust = names(exp_perclust), exp = exp_perclust)
   msg = unique(as.character(possible_clusters[!(possible_clusters %in% clustdf$clust)]))
-  msg = msg[!(msg %in% exc)]
-  for (i in 1:length(msg)){
-    clustdf = rbind(clustdf, c(msg[i], 0))
+  if (length(msg)>0){
+    msg = msg[!(msg %in% exc)]
+    for (i in 1:length(msg)){
+      clustdf = rbind(clustdf, c(msg[i], 0))
+    }
   }
   clustdf$exp = as.numeric(as.character(clustdf$exp))
   clustdf$obs = sapply(clustdf$clust, function(x) nrow(mt[mt$match==TRUE & mt$clust==x,]))
@@ -912,7 +954,7 @@ select_clonotypes_toviz <- function(twin_tcrs){
 }
 
 highlight_twins <- function(md, tcr_info){
-  moreclust2 = readRDS("metadata_moreclust2_combat_full_authTplusNKT_20hPCs_tcrfilt0607_nvargenes200_sampTH1.instTH0.5.poolTH0.5.rds")
+  moreclust2 = readRDS("data/metadata_moreclust2_combat_full_authTplusNKT_20hPCs_tcrfilt0607_nvargenes200_sampTH1.instTH0.5.poolTH0.5.rds")
   moreclust2$cl = moreclust2$cl0.5
   tcr_info = left_join(tcr_info, moreclust2[,c("X", "cl")], by=c("barcode_id"="X"))
   twin_tcrs = get_twin_TCRs(tcr_info)
@@ -926,9 +968,9 @@ highlight_twins <- function(md, tcr_info){
 }
 
 process_tcr_info <- function(singleAB = TRUE){
-  tcr_info = read.table("tcr_chain_information.tsv", sep="\t", header=TRUE)
+  tcr_info = read.table("data/tcr_chain_information.tsv", sep="\t", header=TRUE)
   
-  origclust = readRDS("metadata_moreclust2_combat_full_authTplusNKT_20hPCs_tcrfilt0607_nvargenes200_sampTH1.instTH0.5.poolTH0.5.rds")
+  origclust = readRDS("data/metadata_moreclust2_combat_full_authTplusNKT_20hPCs_tcrfilt0607_nvargenes200_sampTH1.instTH0.5.poolTH0.5.rds")
   tcr_info = tcr_info[tcr_info$barcode_id %in% origclust$X, ] ##371621 of the 395573 post-QC cells have _any_ TCR info
   
   tcr_info$nbeta = 0
@@ -1300,6 +1342,24 @@ get_ccascore_umap <- function(combat_ref, ren_mapped_file, cca_res, CV, side="Y"
   g = ggplot(tp, aes(UMAP1, UMAP2, color=color))
   g = g + geom_point_rast(size=0.001) + scale_color_gradient2(low="palegoldenrod", mid="palegoldenrod", high=clr, midpoint=mp) + theme_classic() + labs(color=paste("CV", CV, sep=""))
   g = g +  theme(legend.text = element_text(size=15), legend.title = element_text(size=25))
+  return(g)
+}
+
+geneprot_rankplot <- function(R, cv, labeled, rev=FALSE){
+  df = data.frame(marker = colnames(R), R = R[cv,])
+  ##NAs are due to 0 variance genes
+  df = df[!(is.na(df$R)),]
+  if (rev) { df$R = -df$R }
+  df$lbl = df$marker
+  df$lbl[!(df$marker %in% labeled)] = ""
+  df = df[order(-df$R),]
+  df$rank = seq(1, nrow(df))
+  df$gp = ifelse(grepl("AB_", df$marker), "protein", "gene")
+  print(head(df))
+  print(tail(df))
+  g = ggplot(df, aes(rank, R, color=gp, label=lbl))
+  g = g + geom_point_rast(size=0.001) + scale_color_manual(values=c("darkslateblue", "deeppink2"))
+  g = g + geom_text_repel(max.overlaps = Inf) + theme_classic()
   return(g)
 }
 
