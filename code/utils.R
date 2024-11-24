@@ -428,10 +428,6 @@ scale_variables <- function(data, mns=NULL, sds=NULL){
     sds = sapply(1:ncol(data), function(x) sd(data[,x], na.rm=TRUE))
     names(sds) = colnames(data)
   }
-  #mns = mns[!(is.na(mns)) & !(is.na(sds)) & sds!=0]
-  #sds = sds[names(sds) %in% names(mns)]
-  #data = data[,as.character(names(mns))]
-  #print(table(colnames(data)==names(mns)))
   data = sweep(data, 2, mns)
   data = sweep(data, MARGIN=2, FUN="/", sds)
   data[is.na(data)] <- 0
