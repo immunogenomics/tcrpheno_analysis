@@ -1,0 +1,146 @@
+---
+title: "Figure_5"
+author: "Kaitlyn Lagattuta"
+date: "2024-11-20"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+suppressPackageStartupMessages(source("utils.R"))
+```
+
+```{r}
+metadata = read.csv("data/PAN.A01.v01.raw_count.20210429.NKT_metadata.csv", header=TRUE)
+metadata = metadata[metadata$organ=="TH",]
+## quality control filtering
+metadata = metadata[metadata$mito<.1,]
+metadata = metadata[metadata$n_genes>=500,]
+```
+
+```{r}
+tcr = readRDS("data/suo_pairedTCRdf.rds")
+tcr = tcr[tcr$id %in% metadata$index,]
+tcr = label_invariants2(tcr)
+tcrscores = tcrpheno::score_tcrs(tcr, chain="ab")
+```
+
+```{r}
+tcrscores$index = rownames(tcrscores)
+metadata = left_join(metadata, tcr)
+tcrscores = left_join(tcrscores, metadata)
+```
+
+```{r}
+t = table(tcrscores$donor)
+tcrscores = tcrscores[tcrscores$donor %in% names(t)[t>=100],]
+tcrscores$tphase = "other"
+tcrscores$tphase[grepl("DN", tcrscores$celltype_annotation)] = "DN"
+tcrscores$tphase[grepl("DP", tcrscores$celltype_annotation)] = "DP"
+tcrscores$tphase[tcrscores$celltype_annotation %in% c("CD4+T", "CD8+T", "TREG")] = "SP"
+
+tmp = tcrscores[tcrscores$tphase %in% c("DP", "SP"),]
+tmp$Donor = tmp$donor
+tmp$lcat = "thymus"
+tmp$target4 = tmp$tphase=="SP"
+tmp$X4 = tmp$TCR.mem
+```
+
+```{r}
+plot_TCRscore_validation_bybin(tmp, 4, lcat="thymus", colors = c("turquoise4"), xlab = "TCR-mem score", ylab = "proportion of cells\nin SP state", quantile_bin=0.2, thresh=0, show.legend = FALSE, fate="SP", barplot_only=TRUE)
+```
+
+```{r}
+thy = tmp
+bld = readRDS("data/Dataset3_scored_wannotations.rds")
+df = data.frame(data = c(rep("thymus", nrow(thy)), rep("blood", nrow(bld))), donor = c(thy$donor, bld$Donor), cell = c(thy$cell, bld$cell), TCR.mem = c(thy$X4, bld$TCR.mem), target4 = c(thy$target4, bld$target4))
+
+qu = quantile(df$TCR.mem, probs=seq(0.1, 1, by=0.1))
+df$qu = sapply(df$TCR.mem, function(x) names(qu)[min(which(qu>=x))])
+gr = df %>% group_by(qu) %>% dplyr::summarise(meanTCRmem = mean(TCR.mem))
+df = left_join(df, gr)
+cols = c("bin", "OR", "lowOR", "highOR", "term")
+df$bin = df$meanTCRmem
+df$Donor = df$donor
+df$target = df$target4
+st.thy = get_bin_stats(df[df$data=="thymus",], cols, quantile_bin=0.1)
+st.bld = get_bin_stats(df[df$data!="thymus",], cols, quantile_bin=0.1)
+
+st.thy = st.thy[,2:5]
+colnames(st.thy)[1:3] = paste(colnames(st.thy)[1:3], ".thy", sep="")
+st.bld = st.bld[,2:5]
+colnames(st.bld)[1:3] = paste(colnames(st.bld)[1:3], ".bld", sep="")
+
+tp = full_join(st.thy, st.bld)
+tp = tp[!(grepl("Intercept", as.character(tp$term))),]
+tp$meanTCRmem = as.numeric(as.character(gsub("bin", "", as.character(tp$term))))
+g = ggplot(tp, aes(OR.thy, OR.bld, color=meanTCRmem))
+g = g + geom_errorbar(aes(xmin=lowOR.thy, xmax=highOR.thy), size=1)
+g = g + geom_errorbar(aes(ymin=lowOR.bld, ymax=highOR.bld), size=1) + theme_bw(base_size=18)
+g =g + geom_point(size=3)
+g = g + scale_color_gradient(low="palegoldenrod", high="turquoise4")
+g = g + xlab("thymus\nSP vs. DP OR") + ylab("periphery\nmemory vs. naive OR")
+g + labs(color="TCR-mem\nscore")
+
+yi <- c(0.136, 0.141)   # observed effect size estimates
+vi <- c(0.00655^2, 0.0267^2) # corresponding sampling variances
+rma(yi, vi, method="FE")
+```
+
+```{r}
+igor.thy = process_igor_output("data/suo_igorresults_117.rds")
+tcrscores = left_join(tcrscores, igor.thy[,c("id", "ab_ins")], by=c("index"="id"))
+
+tidy(glmer(tphase=="SP" ~ TCR.mem + ab_ins + (1|donor), data=tcrscores[tcrscores$tphase %in% c("SP", "DP"),], family="binomial"))
+```
+
+
+```{r}
+tcrscores$TCR.mem_decile = convert_to_quantile(tcrscores$TCR.mem, step=0.1)
+tcrscores$ab_ins = as.numeric(as.character(tcrscores$ab_ins))
+tcrscores$ab_ins2 = as.character(tcrscores$ab_ins)
+tcrscores$ab_ins2[tcrscores$ab_ins>=10] = "10+"
+ins.gr = tcrscores[!(is.na(tcrscores$TCR.mem_decile)) & tcrscores$tphase %in% c("SP", "DP"),] %>% group_by(ab_ins2, TCR.mem_decile) %>% dplyr::summarise(p = length(tphase[tphase=="SP"])/length(tphase), meanTCR.mem = mean(TCR.mem, na.rm=TRUE), n = length(tphase))
+
+tpl = ins.gr[,c("ab_ins2", "TCR.mem_decile", "p")]
+tp = data.frame(pivot_wider(tpl, names_from=ab_ins2, values_from=p))
+rownames(tp) = tp$TCR.mem_decile
+tp = tp[,c(paste("X", seq(0, 9), sep=""), "X10.")]
+colnames(tp) = c(as.character(seq(0, 9)), "10+")
+rownames(tp) = seq(1, 10)
+pheatmap(tp, cluster_rows = FALSE, cluster_cols = FALSE)
+```
+
+```{r}
+## mRNA reference constructed with COMBAT data
+ref = readRDS("data/COMBAT_metadata.rds")
+
+res = readRDS("data/Dataset6_mapped_to_mRNA_reference.rds")
+projected = data.frame(res$umap)
+projected$index = res$meta_data$index
+projected = projected[projected$index %in% metadata$index[metadata$my_abMAIT==TRUE | metadata$my_abNKT==TRUE],]
+projected = left_join(projected, metadata[,c("my_abMAIT", "my_abNKT", "index")])
+projected$TCR = ifelse(projected$my_abMAIT==TRUE, "MAIT TCR", "NKT TCR")
+
+g = ggplot()
+g = g + geom_point_rast(aes(x=ref$UMAP1, ref$UMAP2), color="gray", shape=".")
+g + geom_point_rast(aes(x=projected$X1, y=projected$X2, color=projected$TCR)) + scale_color_manual(values=c("darkgoldenrod2", "red")) + theme_classic() + xlab("UMAP1") + ylab("UMAP2")
+```
+
+```{r}
+tmp$target2 = grepl("CD8", tmp$celltype_annotation)
+tmp$X2 = tmp$TCR.CD8
+plot_TCRscore_validation_bybin(tmp[tmp$tphase=="SP",], 2, lcat="thymus", colors = c("dodgerblue3"), xlab = "TCR-CD8 score", ylab = "proportion of cells\nin CD8 state", quantile_bin=0.2, thresh=0, show.legend = FALSE, fate="CD8T", barplot_only=TRUE)
+```
+
+```{r}
+tmp$target3 = grepl("TREG", tmp$celltype_annotation)
+tmp$X3 = tmp$TCR.reg
+plot_TCRscore_validation_bybin(tmp[tmp$tphase=="SP",], 3, lcat="thymus", colors = c("darkmagenta"), xlab = "TCR-reg score", ylab = "proportion of cells\nin Treg state", quantile_bin=0.2, thresh=0, show.legend = FALSE, fate="Treg", barplot_only=TRUE)
+```
+

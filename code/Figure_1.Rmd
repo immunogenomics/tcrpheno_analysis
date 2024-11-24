@@ -1,0 +1,66 @@
+---
+title: "Figure_1.rmd"
+author: "Kaitlyn Lagattuta"
+date: "2024-11-18"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+suppressPackageStartupMessages(source("utils.R"))
+```
+
+## Figure 1A
+
+```{r}
+md = readRDS("data/COMBAT_metadata.rds")
+md$mRNA_cluster = paste("A", as.numeric(as.character(md$cl0.5))+1, sep="")
+F1A = my_cluster_umap(md, "mRNA_cluster")
+F1A
+```
+
+## Figure 1B
+
+```{r}
+tcr_info = process_tcr_info()
+md$barcode_id = md$X
+md = left_join(md, tcr_info)
+md = label_invariants(md)
+g = ggplot(md[order(md$my_abMAIT),], aes(UMAP1, UMAP2, color=my_abMAIT))
+g = g + scale_color_manual(values=c("gray90", "darkgoldenrod2")) 
+F1B = my_umap_theme(g, aes=12) + labs(color="MAIT TCR") 
+F1B
+```
+
+## Figure 1C
+
+```{r}
+g = ggplot(md[order(md$my_abNKT),], aes(UMAP1, UMAP2, color=my_abNKT))
+g = g + scale_color_manual(values=c("gray90", "red"))
+F1C = my_umap_theme(g, aes=12) + labs(color="NKT TCR")
+F1C
+```
+
+
+## Figure 1D
+
+```{r}
+F1D = highlight_twins(md)
+F1D
+```
+
+
+## Figure 1E
+
+```{r}
+twin_res1 = twin_analysis(md)
+F1E = twin_res1$lineplot
+F1E
+```
+
+

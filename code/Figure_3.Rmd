@@ -1,0 +1,217 @@
+---
+title: "Figure_3"
+author: "Kaitlyn Lagattuta"
+date: "2024-11-19"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+suppressPackageStartupMessages(source("utils.R"))
+```
+
+## Testing TCR scores within each stratum of individuals (Dataset 1 and Dataset 2)
+
+```{r}
+md = read.csv("data/COMBATrenmerged_cellstatetargets_0606.csv")
+
+cmd = readRDS("data/COMBAT_metadata.rds")
+cmd$DiseaseClassification = as.character(cmd$DiseaseClassification)
+cmd$DiseaseClassification[is.na(cmd$DiseaseClassification)] = "Healthy"
+md = left_join(md, cmd[,c("X", "DiseaseClassification")], by=c("cell"="X"))
+
+mapped = readRDS("data/Dataset2_mapped_to_mRNA_reference.rds")
+rmd = mapped$meta_data
+md = left_join(md, rmd[,c("SARS.CoV.2..based.on.PCR.", "cellName")], by=c("cell"="cellName"))
+
+md$dataset = ""
+md$dataset[md$cell %in% cmd$X] = "COMBAT"
+md$dataset[md$cell %in% rmd$cellName] = "Ren et al."
+
+md$condition = "none"
+md$condition[grepl("COVID-19", md$DiseaseClassification) | md$SARS.CoV.2..based.on.PCR.=="positive"] = "COVID+"
+md$condition[md$SARS.CoV.2..based.on.PCR.=="negative"] = "COVID-"
+md$condition[grepl("Sepsis", md$DiseaseClassification)] = "Sepsis"
+md$condition[grepl("Influenza", md$DiseaseClassification)] = "Influenza"
+
+md$strata = paste(md$condition, md$dataset, sep="; ")
+md$strata[md$group=="test"] = "test"
+
+xtr = readRDS("data/CRtrtest_061324/CR_xtrain_scored.rds")
+xte = readRDS("data/CRtrtest_061324/CR_xtest_scored.rds")
+xte = scale_variables(xte, tcrpheno:::ABscore_mns, tcrpheno:::ABscore_sds)
+scored = rbind(xtr, xte)
+scored$cell = rownames(scored)
+
+md = left_join(md, scored)
+
+score = c("TCR.innate", "TCR.CD8", "TCR.reg", "TCR.mem")
+lineage = c("all", "CD4", "CD8")
+strata = c(unique(md$strata), "all; both", "all; Ren et al.", "all; COMBAT")
+
+## Setting up a dataframe to hold mixed effects logistic regression results, testing the effect size of each TCR score in each T cell lineage (all, CD4T, and CD8T) and clinical stratum
+results = data.frame(expand.grid(score, lineage, strata))
+colnames(results) = c("score", "lineage", "strata")
+
+## TCR-innate and TCR-CD8 scores should not be applied within CD4T or within CD8T lineages
+results = results[!(results$score=="TCR.innate" & results$lineage!="all"),]
+results = results[!(results$score=="TCR.CD8" & results$lineage!="all"),]
+results$beta = 0
+results$se = 0
+results$p = 0
+for (i in 1:nrow(results)){
+  if (!(grepl("all", results$strata[i]))){
+    sub = md[md$strata==results$strata[i],]
+  } else if (results$strata[i]=="all; COMBAT") {
+    sub = md[md$dataset=="COMBAT" & md$strata!="test",]
+  } else if (results$strata[i]=="all; Ren et al.") {
+    sub = md[md$dataset!="COMBAT" & md$strata!="test",]
+  } else {
+    sub = md[md$strata!="test",]
+  }
+  if (results$lineage[i]=="CD4"){
+    sub = sub[sub$target2==0,]
+  }
+  if (results$lineage[i]=="CD8") {
+    sub = sub[sub$target2==1,]
+  }
+  if (results$score[i]=="TCR.innate"){
+    sub$score = sub$TCR.innate
+    sub$target = sub$target1
+  } else if (results$score[i]=="TCR.CD8") {
+    sub$score = sub$TCR.CD8
+    sub$target = sub$target2
+  } else if (results$score[i]=="TCR.reg"){
+    sub$score = sub$TCR.reg
+    sub$target = sub$target3
+  } else {
+    sub$score = sub$TCR.mem
+    sub$target = sub$target4
+  }
+  
+  ##Mixed effects logisitic regression to test the TCRscore in this strata
+  stats = tidy(glmer(target ~ score + (1|donor), data=sub, family="binomial"))
+  results$beta[i] = stats$estimate[2]
+  results$se[i] = stats$std.error[2]
+  results$p[i] = stats$p.value[2]
+}
+```
+
+```{r}
+sts = unique(as.character(results$strata))
+results$strata = factor(results$strata, levels=c(sts[sts!="test"], "test"))
+results = results[order(results$score, results$strata),]
+```
+
+```{r}
+results$strata = as.character(results$strata)
+results$plot = paste(results$lineage, results$score)
+plots = unique(results$score)
+
+##Meta-analysis across clinical strata for each TCR score
+for (i in 1:length(plots)){
+  sub = results[results$score==plots[i] & results$strata!="test" & results$lineage=="all" & !(grepl("all", results$strata)),]
+  ma = data.frame(sub[1,])
+  ma$strata[1] = "meta-analysis"
+  ma$beta[1] = get_metabeta(sub$beta, sub$se)
+  ma$se[1] = get_metase(sub$se)
+  ma$p[1] = get_metap(sub$beta, sub$se)
+  ma$p[1] = ifelse(ma$beta>0, ma$p[1]/2, 1-(ma$p[1]/2))
+  results = rbind(results, ma)
+}
+results$type = results$strata=="meta-analysis"
+```
+
+```{r}
+df = results[!(grepl("all", results$strata)) & results$lineage=="all",]
+df$strata = gsub("COMBAT", "Dataset 1", df$strata)
+df$strata = gsub("Ren et al.", "Dataset 2", df$strata)
+df$strata = factor(df$strata, levels=c("test", "meta-analysis", "COVID-; Dataset 2", "COVID+; Dataset 2", "none; Dataset 1", "Sepsis; Dataset 1", "Influenza; Dataset 1", "COVID+; Dataset 1"))
+
+g = ggplot(df[df$score=="TCR.innate",], aes(beta, strata, color=strata=="meta-analysis", shape=strata=="meta-analysis", size=strata=="meta-analysis"))
+g = g + scale_shape_manual(values=c(16, 18)) + scale_size_manual(values=c(1,4)) + scale_color_manual(values=c("black", "orangered3"))
+g = g + geom_vline(xintercept=0, linetype="dashed") + geom_point(show.legend=FALSE) + geom_errorbar(aes(xmin=beta+qnorm(0.025)*se, xmax=beta+qnorm(0.975)*se), size=0.5, show.legend=FALSE)
+g + theme_bw(base_size=15) + xlab("") + ylab("") + xlim(c(0,1.5))
+
+```
+
+```{r}
+g = ggplot(df[df$score=="TCR.CD8",], aes(beta, strata, color=strata=="meta-analysis", shape=strata=="meta-analysis", size=strata=="meta-analysis"))
+g = g + scale_shape_manual(values=c(16, 18)) + scale_size_manual(values=c(1,4)) + scale_color_manual(values=c("black", "dodgerblue3"))
+g = g + geom_vline(xintercept=0, linetype="dashed") + geom_point(show.legend=FALSE) + geom_errorbar(aes(xmin=beta+qnorm(0.025)*se, xmax=beta+qnorm(0.975)*se), size=0.5, show.legend=FALSE)
+g + theme_bw(base_size=15) + xlab("") + ylab("") + xlim(c(0,1.5))
+```
+
+```{r}
+g = ggplot(df[df$score=="TCR.reg",], aes(beta, strata, color=strata=="meta-analysis", shape=strata=="meta-analysis", size=strata=="meta-analysis"))
+g = g + scale_shape_manual(values=c(16, 18)) + scale_size_manual(values=c(1,4)) + scale_color_manual(values=c("black", "darkmagenta"))
+g = g + geom_vline(xintercept=0, linetype="dashed") + geom_point(show.legend=FALSE) + geom_errorbar(aes(xmin=beta+qnorm(0.025)*se, xmax=beta+qnorm(0.975)*se), size=0.5, show.legend=FALSE)
+g + theme_bw(base_size=15) + xlab("") + ylab("") + xlim(c(0,0.6))
+```
+
+```{r}
+g = ggplot(df[df$score=="TCR.mem",], aes(beta, strata, color=strata=="meta-analysis", shape=strata=="meta-analysis", size=strata=="meta-analysis"))
+g = g + scale_shape_manual(values=c(16, 18)) + scale_size_manual(values=c(1,4)) + scale_color_manual(values=c("black", "turquoise4"))
+g = g + geom_vline(xintercept=0, linetype="dashed") + geom_point(show.legend=FALSE) + geom_errorbar(aes(xmin=beta+qnorm(0.025)*se, xmax=beta+qnorm(0.975)*se), size=0.5, show.legend=FALSE)
+g + theme_bw(base_size=15) + xlab("") + ylab("") + xlim(c(0,0.3))
+```
+
+## Testing TCR scores in an external dataset (Dataset 3)
+
+```{r}
+## Read in TCRs from Stephenson et al. (Dataset 3)
+
+## The following file, stored on figshare for convenience, is the result of 
+## tcrpheno::score_tcrs following de-duplication of expanded clones
+tcr_scores = readRDS("data/stephenson_LR062424scores_nocex.rds")
+
+## Annotating metadata with target T cell states, based on Symphony reference mapping
+md = read.csv("data/stephenson_metadata.csv")
+
+cl1 = readRDS("data/Dataset3_mapped_to_mRNA_reference_KNNcl0.5.rds")
+md = md[md$covid_index %in% cl1$covid_index,] ##pass RNAqc
+md$target1 = md$covid_index %in% cl1$covid_index[cl1$pred=="8"]
+md$target3 = md$covid_index %in% cl1$covid_index[cl1$pred=="5"]
+cl2 = readRDS("data/Dataset3_mapped_to_mRNA_reference_KNNcl2.0.rds")
+md$target3[md$covid_index %in% cl2$covid_index[cl2$'cl2.0'=="15"]] = TRUE
+s.cmem = readRDS("data/Dataset3_mapped_to_multimodal_reference.rds")
+md$target2 = md$covid_index %in% s.cmem$covid_index[grepl("CD8", s.cmem$pred)]
+md$target2[md$target1==TRUE] = NA
+md$target2[md$covid_index %in% s.cmem$covid_index[s.cmem$pred=="DN"]] = NA
+md$target4 = md$covid_index %in% s.cmem$covid_index[!(grepl("naive", s.cmem$pred))]
+md$target3[md$target1==TRUE] = NA
+md$target4[md$target1==TRUE] = NA
+
+md$Donor = as.character(md$patient_id)
+md$cell = as.character(md$covid_index)
+tcr_scores$cell = rownames(tcr_scores)
+steph = left_join(tcr_scores, md[,c("Donor", "target1", "target2", "target3", "target4", "cell")])
+steph$lcat = "blood"
+
+steph$X1 = steph$TCR.innate
+steph$X2 = steph$TCR.CD8
+steph$X3 = steph$TCR.reg
+steph$X4 = steph$TCR.mem
+#saveRDS(steph, "data/Dataset3_scored_wannotations.rds")
+```
+
+```{r}
+plot_TCRscore_validation_bybin(steph, 1, lcat="blood", colors = c("orangered3"), xlab = "TCR-innate score", ylab = "proportion of\nPLZFhigh T cells", quantile_bin=0.1, thresh=0, show.legend = FALSE, fate="PLZFhigh", do_mm=TRUE)
+```
+
+```{r}
+plot_TCRscore_validation_bybin(steph, 2, lcat="blood", colors = c("dodgerblue3"), xlab = "TCR-CD8 score", ylab = "proportion of\nCD8T cells", quantile_bin=0.1, thresh=0, show.legend = FALSE, fate="CD8T", do_mm=TRUE)
+```
+
+```{r}
+plot_TCRscore_validation_bybin(steph, 3, lcat="blood", colors = c("darkmagenta"), xlab = "TCR-reg score", ylab = "proportion of\nregulatory T cells", quantile_bin=0.1, thresh=0, show.legend = FALSE, fate="Treg", do_mm=TRUE)
+```
+
+```{r}
+plot_TCRscore_validation_bybin(steph, 4, lcat="blood", colors = c("turquoise4"), xlab = "TCR-mem score", ylab = "proportion of\nmemory T cells", quantile_bin=0.1, thresh=0, show.legend = FALSE, fate="memory T", do_mm=TRUE)
+```
