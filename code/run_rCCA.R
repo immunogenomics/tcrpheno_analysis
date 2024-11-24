@@ -85,7 +85,10 @@ tag <- paste(tag, "rds", sep=".")
 
 md = readRDS("data/merged_metadata_Datasets1and2.rds")
 
+## x = TCR features (result from featurize_TCRs.R)
 x = readRDS("data/CRtrtest_061324/CR_xtrain.rds")
+
+## y = T cell state featueres (harmonized PC scores from gene expression data)
 y = readRDS("data/CRtrtest_061324/CR_ytrain.rds")
 
 df = data.frame(cell = rownames(x))
